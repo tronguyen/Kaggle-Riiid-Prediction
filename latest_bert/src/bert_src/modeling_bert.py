@@ -727,6 +727,12 @@ class RiidEmbeddings(nn.Module):
         # for Riid
         self.task_id_embeddings = nn.Embedding(config.task_size, config.hidden_size)
         self.curr_ans_embeddings = nn.Embedding(config.ans_size, config.hidden_size)
+        
+        self.part_embeddings = nn.Embedding(config.part_size, config.hidden_size)
+        self.tag_embeddings = nn.Linear(config.tag_size, config.hidden_size, bias=False)
+        
+        self.prior_time_embeddings = nn.Embedding(301, config.hidden_size)
+        self.lag_time_embeddings = nn.Embedding(config.lag_size, config.hidden_size)
 
         # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
         # any TensorFlow checkpoint file
@@ -737,7 +743,7 @@ class RiidEmbeddings(nn.Module):
         self.register_buffer("position_ids", torch.arange(config.max_position_embeddings).expand((1, -1)))
 
     def forward(self, input_ids=None, token_type_ids=None, position_ids=None, inputs_embeds=None, 
-                task_ids=None, curr_ans=None):
+                task_ids=None, curr_ans=None, part_ids=None, tag_ids=None, prior_time_ids=None, lag_time_ids=None):
         if input_ids is not None:
             input_shape = input_ids.size()
         else:
@@ -756,17 +762,30 @@ class RiidEmbeddings(nn.Module):
             
         if curr_ans is None:
             curr_ans = torch.zeros(input_shape, dtype=torch.long, device=self.position_ids.device)
+        
+        if part_ids is None:
+            part_ids = torch.zeros(input_shape, dtype=torch.long, device=self.position_ids.device)
+        
+        if tag_ids is None:
+            tag_ids = torch.zeros(input_shape, dtype=torch.long, device=self.position_ids.device)
 
         if inputs_embeds is None:
             inputs_embeds = self.word_embeddings(input_ids)
+            
         position_embeddings = self.position_embeddings(position_ids)
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
         # Riid
         task_id_embeddings = self.task_id_embeddings(task_ids)
         curr_ans_embeddings = self.curr_ans_embeddings(curr_ans)
+        
+        part_embeddings = self.part_embeddings(part_ids)
+        tag_embeddings = self.tag_embeddings(tag_ids)
+        
+        prior_time_embeddings = self.prior_time_embeddings(prior_time_ids)
+        lag_time_embeddings = self.lag_time_embeddings(lag_time_ids)
 
-        embeddings = inputs_embeds + position_embeddings + token_type_embeddings \
-                    + task_id_embeddings + curr_ans_embeddings
+        embeddings = inputs_embeds + position_embeddings \
+                    + task_id_embeddings + part_embeddings + tag_embeddings + prior_time_embeddings + lag_time_embeddings
         
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
@@ -833,7 +852,11 @@ class RiidModel(BertPreTrainedModel):
         output_hidden_states=None,
         return_dict=None,
         task_ids=None, 
-        curr_ans=None
+        curr_ans=None,
+        part_ids=None, 
+        tag_ids=None,
+        prior_time_ids=None,
+        lag_time_ids=None
     ):
         r"""
         encoder_hidden_states  (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length, hidden_size)`, `optional`):
@@ -871,6 +894,24 @@ class RiidModel(BertPreTrainedModel):
         # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
         # ourselves in which case we just need to make it broadcastable to all heads.
         extended_attention_mask: torch.Tensor = self.get_extended_attention_mask(attention_mask, input_shape, device)
+        
+        if True: # make same as decoder att-mask
+            batch_size, seq_length = input_shape
+            seq_ids = torch.arange(seq_length, device=device)
+            causal_mask = seq_ids[None, None, :].repeat(batch_size, seq_length, 1) <= seq_ids[None, :, None]
+            causal_mask = causal_mask.to(attention_mask.dtype)
+            if causal_mask.shape[1] < attention_mask.shape[1]:
+                prefix_seq_len = attention_mask.shape[1] - causal_mask.shape[1]
+                causal_mask = torch.cat(
+                    [
+                        torch.ones(
+                            (batch_size, seq_length, prefix_seq_len), device=device, dtype=causal_mask.dtype
+                        ),
+                        causal_mask,
+                    ],
+                    axis=-1,
+                )
+            extended_attention_mask = causal_mask[:, None, :, :] * attention_mask[:, None, None, :]
 
         # If a 2D or 3D attention mask is provided for the cross-attention
         # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]
@@ -891,8 +932,10 @@ class RiidModel(BertPreTrainedModel):
         head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
 
         embedding_output = self.embeddings(
-            input_ids=input_ids, position_ids=position_ids, token_type_ids=token_type_ids, inputs_embeds=inputs_embeds,
-            task_ids=task_ids, curr_ans=curr_ans
+            input_ids=input_ids, position_ids=position_ids, token_type_ids=token_type_ids,
+            inputs_embeds=inputs_embeds,
+            task_ids=task_ids, curr_ans=curr_ans, part_ids=part_ids, 
+            tag_ids=tag_ids, prior_time_ids=prior_time_ids, lag_time_ids=lag_time_ids
         )
         encoder_outputs = self.encoder(
             embedding_output,

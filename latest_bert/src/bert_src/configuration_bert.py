@@ -127,6 +127,9 @@ class BertConfig(PretrainedConfig):
         lecture_size=418,
         task_size=100,
         ans_size=2,
+        part_size=8,
+        tag_size=189,
+        lag_size=720,
         **kwargs
     ):
         super().__init__(pad_token_id=pad_token_id, **kwargs)
@@ -149,3 +152,7 @@ class BertConfig(PretrainedConfig):
         self.lecture_size = lecture_size
         self.task_size = task_size
         self.ans_size = ans_size
+        self.part_size = part_size
+        self.tag_size = tag_size
+        self.lag_size=lag_size
+        
